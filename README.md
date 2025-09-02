@@ -35,6 +35,18 @@ It will prompt for your Firebase project ID, store the `APP_SECRET`, enable requ
 
 Prefer to roll your own? Implement an HTTPS endpoint that validates a shared secret or IAM and writes to Firestore. A minimal TypeScript sample is in [`functions/index.ts`](functions/index.ts).
 
+#### Region configuration
+- Default region is `us-central1`.
+- To deploy to a different region using the guided installer, use `scripts/install.sh` and pass `--region <region>` or export `REGION`:
+
+```
+scripts/install.sh --project <PROJECT_ID> --region europe-west1
+# or
+REGION=asia-southeast1 scripts/install.sh --project <PROJECT_ID>
+```
+
+The Functions code reads `process.env.REGION` at deploy time to set the function region. The value you pass via `--region`/`REGION` will be used for deployment and when resolving the endpoint.
+
 ### 2) Apps Script (the bridge)
 - Create/open your Google Sheet
 - Open **Extensions → Apps Script** and paste the code from `src/Code.gs`

@@ -51,6 +51,9 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# Ensure REGION is available to child processes (tsc/build + Firebase CLI)
+export REGION
+
 need_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
     echo "Missing required CLI: $1" >&2
@@ -110,6 +113,7 @@ echo "\n3) Building and deploying Cloud Function (adminAddDoc)..."
   else
     npm install
   fi
+  # Build after exporting REGION so the Firebase CLI can read it when loading triggers
   npm run build
 )
 
@@ -152,4 +156,3 @@ Done.
 - Collection:  $COLLECTION
 
 EOF
-

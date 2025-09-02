@@ -14,6 +14,10 @@ const APP_SECRET = defineSecret('APP_SECRET');
 // Optional: basic allowlist/shape check for collection names (alphanum, dashes/underscores)
 const COLLECTION_RE = /^[A-Za-z0-9_-]{1,128}$/;
 
+// Region is configurable via environment variable set at deploy time
+// Fallback to 'us-central1' if not provided. Use globalThis to avoid needing @types/node.
+const REGION = (globalThis as any)?.process?.env?.REGION || 'us-central1';
+
 type IncomingBody = {
   collection?: string;
   doc?: Record<string, unknown>;
@@ -29,7 +33,7 @@ function setCors(res: Response) {
 }
 
 export const adminAddDoc = onRequest(
-  { region: 'us-central1', secrets: [APP_SECRET] },
+  { region: REGION, secrets: [APP_SECRET] },
   async (req: Request, res: Response) => {
     setCors(res);
 
