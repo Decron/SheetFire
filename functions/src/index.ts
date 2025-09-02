@@ -4,6 +4,9 @@ import { defineSecret } from 'firebase-functions/params';
 import * as logger from 'firebase-functions/logger';
 import * as admin from 'firebase-admin';
 import type { Request, Response } from 'express';
+// Avoid requiring @types/node by using dynamic require
+declare const require: any;
+const { timingSafeEqual } = require('crypto');
 
 admin.initializeApp();
 const db = admin.firestore();
@@ -49,9 +52,28 @@ export const adminAddDoc = onRequest(
         return;
       }
 
-      // Shared-secret header gate
-      const secret = req.get('x-app-secret');
-      if (!secret || secret !== APP_SECRET.value()) {
+      // Shared-secret header gate (timing-safe compare)
+      const provided = req.get('x-app-secret') ?? '';
+      const expected = APP_SECRET.value() ?? '';
+
+      if (!provided || !expected) {
+        res.status(401).send('Unauthorized');
+        return;
+      }
+
+      // Encode both secrets to equal-type byte arrays
+      const encoder = new (globalThis as any).TextEncoder();
+      const providedBytes = encoder.encode(provided);
+      const expectedBytes = encoder.encode(expected);
+
+      // Reject early if lengths differ
+      if (providedBytes.byteLength !== expectedBytes.byteLength) {
+        res.status(401).send('Unauthorized');
+        return;
+      }
+
+      // Constant-time comparison
+      if (!timingSafeEqual(providedBytes, expectedBytes)) {
         res.status(401).send('Unauthorized');
         return;
       }
