@@ -1,10 +1,24 @@
 // ==== CONFIG ====
-const CF_ENDPOINT = 'https://functionname.a.run.app';
-const COLLECTION  = 'imageDataTest';
-const APP_SECRET  = 'randomString';
+// Values can be overridden via Script Properties (CF_ENDPOINT, COLLECTION, APP_SECRET)
+const props = PropertiesService.getScriptProperties();
+const CF_ENDPOINT = props.getProperty('CF_ENDPOINT') || 'https://functionname.a.run.app';
+const COLLECTION  = props.getProperty('COLLECTION')  || 'imageDataTest';
+const APP_SECRET  = props.getProperty('APP_SECRET')  || 'randomString';
 const DOC_ID_FIELD_NAME = 'docId';
 const INCLUDE_ID_FIELD_IN_DOC = false;
 // ========================
+
+/**
+ * Set required script properties (CF_ENDPOINT, COLLECTION, APP_SECRET).
+ * Intended for use via clasp run or the Apps Script API.
+ */
+function setProperties(opts) {
+  PropertiesService.getScriptProperties().setProperties({
+    CF_ENDPOINT: opts.endpoint,
+    COLLECTION: opts.collection,
+    APP_SECRET: opts.secret,
+  }, true);
+}
 
 /**
  * Push the current selection (treated as rows) to Firestore.

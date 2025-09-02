@@ -45,6 +45,13 @@ Prefer to roll your own? Implement an HTTPS endpoint that validates a shared sec
 - In **Editor**, add `appsscript.json` (from this repo) to lock scopes
 - Reload the sheet: you’ll see a **Firestore** menu
 
+Or set those properties from the command line:
+
+```bash
+clasp login --creds path/to/creds.json  # once
+node scripts/set-script-props.js <endpoint> <collection> <secret>
+```
+
 ### 3) (Optional) Google Forms auto-push
 If the sheet is linked to a Form, Install the **On form submit** trigger (Edit → Current project’s triggers) pointing to `onFormSubmit`.
 
