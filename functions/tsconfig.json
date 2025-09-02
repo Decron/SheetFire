@@ -1,11 +1,13 @@
 {
   "compilerOptions": {
-    "target": "ES2020",
     "module": "commonjs",
-    "outDir": "lib",
-    "rootDir": "src",
+    "noImplicitReturns": true,
     "esModuleInterop": true,
-    "strict": true
+    "allowSyntheticDefaultImports": true,
+    "strict": true,
+    "outDir": "lib",
+    "target": "ES2020"
   },
+  "compileOnSave": true,
   "include": ["src"]
 }

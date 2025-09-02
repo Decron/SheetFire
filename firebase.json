@@ -1,0 +1,9 @@
+{
+  "functions": [
+    {
+      "source": "functions",
+      "codebase": "default",
+      "region": "us-central1"
+    }
+  ]
+}
