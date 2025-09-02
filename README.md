@@ -25,7 +25,15 @@ Sheets/Forms → Apps Script → HTTPS endpoint → Firestore
 ## Quick start
 
 ### 1) Backend (Cloud Functions/Run)
-Implement an HTTPS endpoint that validates a shared secret or IAM and writes to Firestore. A minimal Node sample is in [`server/index.js`](#serverindexjs). Deploy it and record its URL.
+Run the provided setup script to deploy the sample backend:
+
+```
+./scripts/setup-backend.sh
+```
+
+It will prompt for your Firebase project ID, store the `APP_SECRET`, enable required APIs, and deploy the `adminAddDoc` function.
+
+Prefer to roll your own? Implement an HTTPS endpoint that validates a shared secret or IAM and writes to Firestore. A minimal TypeScript sample is in [`functions/index.ts`](functions/index.ts).
 
 ### 2) Apps Script (the bridge)
 - Create/open your Google Sheet
