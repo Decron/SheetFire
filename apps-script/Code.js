@@ -200,6 +200,156 @@ function onOpen() {
     .addToUi();
 }
 
+// ================= Additional automation helpers =================
+
+/**
+ * Return the active spreadsheet ID and URL.
+ */
+function getSpreadsheetInfo() {
+  const ss = SpreadsheetApp.getActive();
+  return { id: ss.getId(), url: ss.getUrl(), name: ss.getName() };
+}
+
+/**
+ * Ensure a Drive folder exists by name in My Drive; return its ID.
+ * If multiple folders with the same name exist, returns the first match.
+ */
+function ensureFolder_(name) {
+  const iter = DriveApp.getFoldersByName(name);
+  if (iter.hasNext()) return iter.next();
+  return DriveApp.createFolder(name);
+}
+
+/**
+ * Move this spreadsheet into a folder (creating the folder if needed).
+ * Returns the folder ID.
+ */
+function moveSelfToFolder(opts) {
+  const folderName = (opts && opts.folderName) || 'SheetFire';
+  const folder = ensureFolder_(folderName);
+  const ss = SpreadsheetApp.getActive();
+  const file = DriveApp.getFileById(ss.getId());
+  // Add to target folder and remove from root to emulate a move.
+  folder.addFile(file);
+  try {
+    DriveApp.getRootFolder().removeFile(file);
+  } catch (e) {
+    // Ignore if API disallows remove (some enterprise settings); file will still be in target folder
+  }
+  return { folderId: folder.getId(), folderUrl: folder.getUrl() };
+}
+
+/**
+ * Create a Google Form and link its destination to this spreadsheet.
+ * Optionally move it to the provided folderName. Returns { formId, formUrl }.
+ */
+function setupForm(opts) {
+  const title = (opts && opts.title) || 'SheetFire Form';
+  const folderName = opts && opts.folderName;
+
+  const form = FormApp.create(title);
+
+  // Minimal example item so the form is usable
+  form.addTextItem().setTitle('Name').setRequired(true);
+  form.addParagraphTextItem().setTitle('Notes');
+
+  // Link to this spreadsheet for responses
+  const ss = SpreadsheetApp.getActive();
+  form.setDestination(FormApp.DestinationType.SPREADSHEET, ss.getId());
+
+  // Optionally move the Form into a folder
+  if (folderName) {
+    const folder = ensureFolder_(folderName);
+    const file = DriveApp.getFileById(form.getId());
+    folder.addFile(file);
+    try {
+      DriveApp.getRootFolder().removeFile(file);
+    } catch (e) {}
+  }
+
+  return { formId: form.getId(), formUrl: form.getEditUrl() };
+}
+
+/**
+ * Create an installable trigger on the spreadsheet to capture form submissions
+ * and forward them to Firestore via the configured endpoint.
+ */
+function createOnSubmitTrigger() {
+  const ssId = SpreadsheetApp.getActive().getId();
+  // Avoid duplicate triggers by checking existing ones
+  const triggers = ScriptApp.getProjectTriggers();
+  const exists = triggers.some(t => t.getHandlerFunction() === 'onSheetFormSubmit');
+  if (!exists) {
+    ScriptApp.newTrigger('onSheetFormSubmit')
+      .forSpreadsheet(ssId)
+      .onFormSubmit()
+      .create();
+  }
+  return { created: !exists };
+}
+
+/**
+ * Installable trigger handler for Sheet form submissions. Builds a document from the
+ * submitted row and writes it to Firestore (auto-ID).
+ *
+ * Notes:
+ * - Excludes the DOC_ID_FIELD_NAME and empty headers from the payload if present.
+ * - Also excludes the default 'Timestamp' column added by Google Forms if present.
+ */
+function onSheetFormSubmit(e) {
+  const sheet = e && e.range ? e.range.getSheet() : SpreadsheetApp.getActiveSheet();
+  const headerRow = 1;
+  const lastCol = sheet.getLastColumn();
+  const headers = sheet.getRange(headerRow, 1, 1, lastCol).getValues()[0];
+
+  const row = e && e.range ? e.range.getRow() : headerRow + 1;
+  const values = sheet.getRange(row, 1, 1, lastCol).getValues()[0];
+
+  const doc = {};
+  for (let i = 0; i < headers.length; i++) {
+    const key = String(headers[i] || '').trim();
+    if (!key) continue;
+    if (key === DOC_ID_FIELD_NAME) continue;
+    if (key === 'Timestamp') continue; // default Forms header
+    doc[key] = coerce_(values[i]);
+  }
+
+  // Auto-ID by passing blank docId
+  writeDoc_(doc, '');
+}
+
+/**
+ * Convenience wrapper to do end-to-end setup from clasp run:
+ * - Optionally move Sheet to a folder
+ * - Optionally create a Form and link it
+ * - Ensure an onSubmit trigger exists
+ * Returns key URLs for convenience.
+ */
+function bootstrapDrive(opts) {
+  opts = opts || {};
+  const folderName = opts.folderName || null;
+  const formTitle = opts.formTitle || null;
+
+  let folderInfo = null;
+  if (folderName) folderInfo = moveSelfToFolder({ folderName });
+
+  let formInfo = null;
+  if (formTitle) formInfo = setupForm({ title: formTitle, folderName });
+
+  const trig = createOnSubmitTrigger();
+
+  const ss = SpreadsheetApp.getActive();
+  return {
+    spreadsheetId: ss.getId(),
+    spreadsheetUrl: ss.getUrl(),
+    folderId: folderInfo ? folderInfo.folderId : null,
+    folderUrl: folderInfo ? folderInfo.folderUrl : null,
+    formId: formInfo ? formInfo.formId : null,
+    formUrl: formInfo ? formInfo.formUrl : null,
+    triggerCreated: trig.created,
+  };
+}
+
 /**
  * Nicely formats the push summary for the UI alert.
  */

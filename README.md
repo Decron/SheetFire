@@ -64,6 +64,32 @@ clasp login --creds path/to/creds.json  # once
 node scripts/set-script-props.js <endpoint> <collection> <secret>
 ```
 
+### 2b) One‑shot bootstrap (folder + sheet + optional form)
+Prefer automation? The repo includes a bootstrap that creates a new Sheet bound to the Apps Script, configures it to talk to your backend, and can also create/link a Form and move both into a Drive folder.
+
+```
+scripts/bootstrap-drive.sh \
+  --project <PROJECT_ID> \
+  --region <REGION> \
+  --title "My Data Sheet" \
+  --collection myCollection \
+  --secret <APP_SECRET> \
+  --folder "MyTeam/SheetFire" \
+  --with-form --form-title "My Data Form"
+```
+
+What it does:
+- Creates a new spreadsheet + bound Apps Script via `clasp`
+- Pushes `apps-script/` code and sets CF_ENDPOINT/COLLECTION/APP_SECRET
+- Optionally creates a Form, links responses to the Sheet, adds an onSubmit trigger
+- Optionally creates/moves files into a Drive folder
+
+You must be logged in to `gcloud`, `firebase`, and `clasp` before running.
+
+For a full, step‑by‑step walkthrough from an empty folder to pushing example data, see:
+
+- example.md
+
 ### 3) (Optional) Google Forms auto-push
 If the sheet is linked to a Form, Install the **On form submit** trigger (Edit → Current project’s triggers) pointing to `onFormSubmit`.
 
