@@ -80,6 +80,54 @@ function pushAllRowsToFirestore() {
   ui.alert(formatSummary_(summary));
 }
 
+/**
+ * Same as pushSelectedRowsToFirestore, but returns summary and does not alert.
+ */
+function pushSelectedRowsToFirestoreNoAlert_() {
+  const sheet = SpreadsheetApp.getActiveSheet();
+
+  const headerRow = 1;
+  const lastCol = sheet.getLastColumn();
+  const headers = sheet.getRange(headerRow, 1, 1, lastCol).getValues()[0];
+
+  const docIdColIndex1 = findDocIdColIndex_(headers);
+  if (!docIdColIndex1) {
+    throw new Error('Header "' + DOC_ID_FIELD_NAME + '" not found in row ' + headerRow + '.');
+  }
+
+  const range = sheet.getActiveRange();
+  const startRow = range.getRow();
+  const numRows  = range.getNumRows();
+
+  return processRowsToFirestore_(sheet, headers, docIdColIndex1, startRow, numRows);
+}
+
+/**
+ * Same as pushAllRowsToFirestore, but returns summary and does not alert.
+ */
+function pushAllRowsToFirestoreNoAlert_() {
+  const sheet = SpreadsheetApp.getActiveSheet();
+
+  const headerRow = 1;
+  const lastRow = sheet.getLastRow();
+  if (lastRow <= headerRow) {
+    throw new Error('No data below the header.');
+  }
+
+  const lastCol = sheet.getLastColumn();
+  const headers = sheet.getRange(headerRow, 1, 1, lastCol).getValues()[0];
+
+  const docIdColIndex1 = findDocIdColIndex_(headers);
+  if (!docIdColIndex1) {
+    throw new Error('Header "' + DOC_ID_FIELD_NAME + '" not found in row ' + headerRow + '.');
+  }
+
+  const startRow = headerRow + 1;
+  const numRows  = lastRow - headerRow;
+
+  return processRowsToFirestore_(sheet, headers, docIdColIndex1, startRow, numRows);
+}
+
 
 // ---------------------- Helpers ----------------------
 
@@ -198,6 +246,140 @@ function onOpen() {
     .addItem('Push selected rows', 'pushSelectedRowsToFirestore')
     .addItem('Push all rows (below header)', 'pushAllRowsToFirestore')
     .addToUi();
+}
+
+// ====== Editor Add-on (Sheets) UI ======
+// The functions below enable using this project as an Editor Add-on
+// published via the Google Workspace Marketplace. They reuse the same
+// core push logic while presenting a simple CardService UI.
+
+/** Homepage entry for Editor Add-on (Sheets). */
+function onHomepage(e) {
+  return buildHomeCard_(e);
+}
+
+/** Rebuild UI after file-scope access is granted. */
+function onFileScopeGranted(e) {
+  return buildHomeCard_(e);
+}
+
+/** Build the main home card with actions and quick config info. */
+function buildHomeCard_(e) {
+  var card = CardService.newCardBuilder();
+  card.setHeader(CardService.newCardHeader().setTitle('SheetFire'));
+
+  var s = CardService.newCardSection();
+
+  s.addWidget(CardService.newTextParagraph()
+    .setText('Endpoint: ' + CF_ENDPOINT));
+  s.addWidget(CardService.newTextParagraph()
+    .setText('Collection: ' + COLLECTION));
+
+  var actionsRow = CardService.newButtonSet()
+    .addButton(CardService.newTextButton()
+      .setText('Push selected rows')
+      .setOnClickAction(CardService.newAction().setFunctionName('handlePushSelected_')))
+    .addButton(CardService.newTextButton()
+      .setText('Push all rows')
+      .setOnClickAction(CardService.newAction().setFunctionName('handlePushAll_')));
+  s.addWidget(actionsRow);
+
+  s.addWidget(CardService.newTextButton()
+    .setText('Settings')
+    .setTextButtonStyle(CardService.TextButtonStyle.FILLED)
+    .setOnClickAction(CardService.newAction().setFunctionName('showSettingsCard_')));
+
+  card.addSection(s);
+  return card.build();
+}
+
+/** Show a card to edit CF_ENDPOINT, COLLECTION, and APP_SECRET. */
+function showSettingsCard_(e) {
+  var card = CardService.newCardBuilder();
+  card.setHeader(CardService.newCardHeader().setTitle('Settings'));
+  var s = CardService.newCardSection();
+
+  s.addWidget(CardService.newTextInput()
+    .setFieldName('CF_ENDPOINT')
+    .setTitle('CF_ENDPOINT')
+    .setValue(CF_ENDPOINT));
+  s.addWidget(CardService.newTextInput()
+    .setFieldName('COLLECTION')
+    .setTitle('COLLECTION')
+    .setValue(COLLECTION));
+  s.addWidget(CardService.newTextInput()
+    .setFieldName('APP_SECRET')
+    .setTitle('APP_SECRET')
+    .setValue(APP_SECRET));
+
+  s.addWidget(CardService.newTextButton()
+    .setText('Save')
+    .setTextButtonStyle(CardService.TextButtonStyle.FILLED)
+    .setOnClickAction(CardService.newAction().setFunctionName('saveSettings_')));
+
+  card.addSection(s);
+  return card.build();
+}
+
+/** Persist settings and refresh the home card. */
+function saveSettings_(e) {
+  try {
+    var inputs = (e && e.commonEventObject && e.commonEventObject.formInputs) || {};
+    var endpoint = getInputString_(inputs, 'CF_ENDPOINT', CF_ENDPOINT);
+    var collection = getInputString_(inputs, 'COLLECTION', COLLECTION);
+    var secret = getInputString_(inputs, 'APP_SECRET', APP_SECRET);
+    PropertiesService.getScriptProperties().setProperties({
+      CF_ENDPOINT: endpoint,
+      COLLECTION: collection,
+      APP_SECRET: secret,
+    }, true);
+
+    var nav = CardService.newNavigation().updateCard(buildHomeCard_(e));
+    return CardService.newActionResponseBuilder()
+      .setNavigation(nav)
+      .setNotification(CardService.newNotification().setText('Saved settings.'))
+      .build();
+  } catch (err) {
+    return CardService.newActionResponseBuilder()
+      .setNotification(CardService.newNotification().setText('Error saving: ' + err))
+      .build();
+  }
+}
+
+/** Utility: read a single string value from formInputs. */
+function getInputString_(inputs, key, fallback) {
+  var obj = inputs[key];
+  if (!obj || !obj.stringInputs) return fallback;
+  var vals = obj.stringInputs.value || [];
+  return vals.length ? String(vals[0]) : fallback;
+}
+
+/** Action handler: push selected rows via existing logic. */
+function handlePushSelected_(e) {
+  try {
+    var summary = pushSelectedRowsToFirestoreNoAlert_();
+    return CardService.newActionResponseBuilder()
+      .setNotification(CardService.newNotification().setText('Pushed selected rows: ' + summary.sent + ' sent.'))
+      .build();
+  } catch (err) {
+    return CardService.newActionResponseBuilder()
+      .setNotification(CardService.newNotification().setText('Error: ' + err))
+      .build();
+  }
+}
+
+/** Action handler: push all rows via existing logic. */
+function handlePushAll_(e) {
+  try {
+    var summary = pushAllRowsToFirestoreNoAlert_();
+    return CardService.newActionResponseBuilder()
+      .setNotification(CardService.newNotification().setText('Pushed all rows: ' + summary.sent + ' sent.'))
+      .build();
+  } catch (err) {
+    return CardService.newActionResponseBuilder()
+      .setNotification(CardService.newNotification().setText('Error: ' + err))
+      .build();
+  }
 }
 
 // ================= Additional automation helpers =================

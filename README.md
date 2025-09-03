@@ -90,6 +90,28 @@ For a full, step‑by‑step walkthrough from an empty folder to pushing example
 
 - example.md
 
+### 2c) Sheets Add‑on (Marketplace‑ready)
+Package the same logic as a Sheets Editor Add‑on. This keeps manual menu usage intact, while enabling Marketplace distribution.
+
+- Switch the manifest to Add‑on mode and push to your current clasp project:
+
+```bash
+npm run push:addon
+```
+
+- Or create a new standalone Add‑on project and push:
+
+```bash
+scripts/create-addon-project.sh --title "SheetFire Add-on" \
+  --name "SheetFire" \
+  --logo "https://example.com/logo.png"
+```
+
+Notes:
+- The add‑on UI shows buttons to push selected/all rows and a Settings card to edit CF_ENDPOINT/COLLECTION/APP_SECRET.
+- The classic bound‑script menu (`onOpen`) still works for manual workflows.
+- Before publishing, change the logo, review scopes in `apps-script/manifest.addon.json`, and complete Marketplace requirements (Cloud project linkage, OAuth consent, verification).
+
 ### 3) (Optional) Google Forms auto-push
 If the sheet is linked to a Form, Install the **On form submit** trigger (Edit → Current project’s triggers) pointing to `onFormSubmit`.
 

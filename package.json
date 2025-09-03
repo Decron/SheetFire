@@ -1,4 +1,11 @@
 {
   "name": "sheetfire",
-  "private": true
+  "private": true,
+  "scripts": {
+    "manifest:base": "node scripts/switch-manifest.js base",
+    "manifest:addon": "node scripts/switch-manifest.js addon",
+    "push:base": "npm run manifest:base && cd apps-script && npx --yes clasp push -f",
+    "push:addon": "npm run manifest:addon && cd apps-script && npx --yes clasp push -f",
+    "open": "cd apps-script && npx --yes clasp open"
+  }
 }
