@@ -89,6 +89,10 @@
       <label for="secret">APP_SECRET</label>
       <input id="secret" type="password" placeholder="Enter your APP_SECRET" />
     </div>
+    <div class="row" style="margin: 6px 0 8px;">
+      <button class="btn" id="authBtn">Authorize Secret Storage</button>
+      <span id="authStatus" class="hint"></span>
+    </div>
     <div class="row">
       <button class="btn" id="diagBtn">Run Diagnostics</button>
     </div>
@@ -102,22 +106,57 @@
         el.textContent = msg || '';
         el.className = 'status ' + (cls || '');
       };
+      let authReady = false;
+      let isSaving = false;
+      function setSaving(on) {
+        isSaving = !!on;
+        $("saveBtn").disabled = on;
+        $("reloadBtn").disabled = on;
+        $("diagBtn").disabled = on;
+        $("authBtn").disabled = on;
+      }
 
       function load() {
         setStatus('Loading…');
+        // Check auth status first
         google.script.run
-          .withSuccessHandler((cfg) => {
-            $("endpoint").value = cfg.CF_ENDPOINT || '';
-            $("collection").value = cfg.COLLECTION || '';
-            $("docField").value = cfg.DOC_ID_FIELD_NAME || 'docId';
-            $("includeId").checked = !!cfg.INCLUDE_ID_FIELD_IN_DOC;
-            setStatus('');
+          .withSuccessHandler((status) => {
+            authReady = String(status) !== 'REQUIRED';
+            $("authStatus").textContent = authReady
+              ? 'Ready to save secret.'
+              : 'Authorization required to save secret.';
+            // Then load document config
+            google.script.run
+              .withSuccessHandler((cfg) => {
+                $("endpoint").value = cfg.CF_ENDPOINT || '';
+                $("collection").value = cfg.COLLECTION || '';
+                $("docField").value = cfg.DOC_ID_FIELD_NAME || 'docId';
+                $("includeId").checked = !!cfg.INCLUDE_ID_FIELD_IN_DOC;
+                setStatus('');
+              })
+              .withFailureHandler((err) => setStatus('Error: ' + err, 'err'))
+              .loadDocumentConfig();
           })
-          .withFailureHandler((err) => setStatus('Error: ' + err, 'err'))
-          .loadDocumentConfig();
+          .withFailureHandler(() => {
+            authReady = false;
+            $("authStatus").textContent = 'Unable to check auth. You may need to authorize.';
+            setStatus('');
+            google.script.run
+              .withSuccessHandler((cfg) => {
+                $("endpoint").value = cfg.CF_ENDPOINT || '';
+                $("collection").value = cfg.COLLECTION || '';
+                $("docField").value = cfg.DOC_ID_FIELD_NAME || 'docId';
+                $("includeId").checked = !!cfg.INCLUDE_ID_FIELD_IN_DOC;
+              })
+              .withFailureHandler((err2) => setStatus('Error: ' + err2, 'err'))
+              .loadDocumentConfig();
+          })
+          .authStatus_();
       }
 
       function save() {
+        if (isSaving) return;
+        setSaving(true);
         setStatus('Saving…');
         const payload = {
           CF_ENDPOINT: $("endpoint").value.trim(),
@@ -125,21 +164,46 @@
           DOC_ID_FIELD_NAME: $("docField").value.trim(),
           INCLUDE_ID_FIELD_IN_DOC: $("includeId").checked,
         };
-        // Save settings, then also save secret if provided
-        google.script.run
+        const secret = $("secret").value.trim();
+
+        const doSaveSecret = () => {
+          if (!secret) { setSaving(false); return; }
+          if (!authReady) {
+            setStatus('Saved settings. To save APP_SECRET, click Authorize Secret Storage first.', 'err');
+            setSaving(false);
+            return;
+          }
+          google.script.run
+            .withSuccessHandler(() => {
+              setStatus('Saved settings + secret.', 'ok');
+              $("secret").value = '';
+              setSaving(false);
+            })
+            .withFailureHandler((err) => {
+              setStatus('Secret save failed: ' + err + ' — click Authorize Secret Storage, then try again.', 'err');
+              setSaving(false);
+            })
+            .saveSecret_(("secret").value.trim());
+        };
+
+        const saveConfig = () => google.script.run
           .withSuccessHandler(() => {
-            const secret = $("secret").value.trim();
-            if (secret) {
-              google.script.run
-                .withSuccessHandler(() => setStatus('Saved settings + secret.', 'ok'))
-                .withFailureHandler((err) => setStatus('Save secret failed: ' + err, 'err'))
-                .saveSecret_(secret);
+            if (!secret) setStatus('Saved settings.', 'ok');
+            else setStatus('Settings saved. Now saving secret…');
+            doSaveSecret();
+          })
+          .withFailureHandler((err) => {
+            const s = String(err || '');
+            if (s.includes('429')) {
+              setTimeout(() => saveConfig(), 800);
             } else {
-              setStatus('Saved settings.', 'ok');
+              setStatus('Save failed: ' + err, 'err');
+              setSaving(false);
             }
           })
-          .withFailureHandler((err) => setStatus('Save failed: ' + err, 'err'))
           .saveDocumentConfig(payload);
+
+        saveConfig();
       }
 
       function runDiagnostics() {
@@ -153,6 +217,14 @@
       $("saveBtn").addEventListener('click', save);
       $("reloadBtn").addEventListener('click', load);
       $("diagBtn").addEventListener('click', runDiagnostics);
+      $("authBtn").addEventListener('click', () => {
+        setStatus('Requesting authorization… You may see a Google prompt.');
+        setSaving(true);
+        google.script.run
+          .withSuccessHandler(() => { authReady = true; setStatus('Authorized. You can now save APP_SECRET.', 'ok'); setSaving(false); })
+          .withFailureHandler((err) => { setStatus('Authorization failed or canceled: ' + err, 'err'); setSaving(false); })
+          .authorizeUserProps_();
+      });
 
       document.addEventListener('DOMContentLoaded', load);
     </script>

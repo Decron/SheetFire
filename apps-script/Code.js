@@ -9,13 +9,54 @@ let __SESSION_APP_SECRET = null;
 // ==== Secret storage (per-user) ====
 // Store APP_SECRET in User Properties after the user submits it in settings.
 function saveSecret_(secret) {
-  const encoded = Utilities.base64Encode(String(secret || ''));
-  PropertiesService.getUserProperties().setProperty('APP_SECRET', encoded);
+  try {
+    const s = String(secret || '');
+    const encoded = Utilities.base64Encode(s);
+    PropertiesService.getUserProperties().setProperty('APP_SECRET', encoded);
+    console.log('saveSecret_: stored APP_SECRET in UserProperties (len=' + s.length + ').');
+    return { ok: true };
+  } catch (e) {
+    console.error('saveSecret_ error: ' + (e && e.message ? e.message : e));
+    throw e;
+  }
 }
 
 function getSavedSecret_() {
-  const encoded = PropertiesService.getUserProperties().getProperty('APP_SECRET');
-  return encoded ? Utilities.newBlob(Utilities.base64Decode(encoded)).getDataAsString() : '';
+  try {
+    const encoded = PropertiesService.getUserProperties().getProperty('APP_SECRET');
+    if (!encoded) {
+      console.log('getSavedSecret_: no secret found in UserProperties.');
+      return '';
+    }
+    const secret = Utilities.newBlob(Utilities.base64Decode(encoded)).getDataAsString();
+    console.log('getSavedSecret_: loaded secret from UserProperties (len=' + secret.length + ').');
+    return secret;
+  } catch (e) {
+    console.error('getSavedSecret_ error: ' + (e && e.message ? e.message : e));
+    return '';
+  }
+}
+
+/**
+ * Return overall authorization status for this script (are any additional scopes required?).
+ * Used by the sidebar to decide whether saving APP_SECRET is allowed without hanging.
+ */
+function authStatus_() {
+  try {
+    return ScriptApp.getAuthorizationInfo(ScriptApp.AuthMode.FULL).getAuthorizationStatus();
+  } catch (e) {
+    // If unavailable, assume not required
+    return 'NOT_REQUIRED';
+  }
+}
+
+/**
+ * Touch UserProperties to trigger consent if needed. Returns {ok:true} on success.
+ */
+function authorizeUserProps_() {
+  // Reading any property will force Apps Script to request the script.properties scope if missing.
+  PropertiesService.getUserProperties().getProperty('APP_SECRET');
+  return { ok: true };
 }
 
 /**
@@ -53,6 +94,24 @@ function saveDocumentConfig(opts) {
   if (opts.INCLUDE_ID_FIELD_IN_DOC != null) updates.INCLUDE_ID_FIELD_IN_DOC = String(!!opts.INCLUDE_ID_FIELD_IN_DOC);
   docProps.setProperties(updates, true);
   return { ok: true, updated: Object.keys(updates) };
+}
+
+/** Save document config and optional APP_SECRET in one server call (for HTML sidebar). */
+function saveConfigAndSecret_(opts) {
+  const res = saveDocumentConfig(opts || {});
+  let savedSecret = false;
+  let secretError = '';
+  if (opts && typeof opts.APP_SECRET === 'string' && opts.APP_SECRET.trim()) {
+    try {
+      saveSecret_(opts.APP_SECRET.trim());
+      savedSecret = true;
+    } catch (e) {
+      // Do not throw; report failure to client so settings still save cleanly
+      secretError = String(e && e.message || e);
+      console.error('saveConfigAndSecret_: failed to save APP_SECRET: ' + secretError);
+    }
+  }
+  return { ok: true, updated: res.updated, savedSecret, secretError };
 }
 
 /** Load non-secret config values from Document Properties with defaults. */
@@ -542,6 +601,7 @@ function handlePushAll_(e) {
 function handleDiagnostics_(e) {
   try {
     var secret = getSavedSecret_();
+    if (!secret) console.warn('handleDiagnostics_: APP_SECRET missing; diagnostics will fail.');
     var result = runDiagnostics({ APP_SECRET: secret });
     var text = result.ok ? 'Diagnostics passed: ' + result.message : 'Diagnostics failed: ' + result.message;
     return CardService.newActionResponseBuilder()
