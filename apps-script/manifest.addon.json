@@ -4,8 +4,7 @@
   "runtimeVersion": "V8",
   "oauthScopes": [
     "https://www.googleapis.com/auth/spreadsheets.currentonly",
-    "https://www.googleapis.com/auth/script.external_request",
-    "https://www.googleapis.com/auth/script.properties"
+    "https://www.googleapis.com/auth/script.external_request"
   ],
   "addOns": {
     "common": {
@@ -27,4 +26,3 @@
     }
   }
 }
-

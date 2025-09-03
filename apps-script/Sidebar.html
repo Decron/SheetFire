@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <base target="_top">
+    <style>
+      :root {
+        --bg: #fff;
+        --fg: #202124;
+        --muted: #5f6368;
+        --primary: #1967D2;
+        --border: #dadce0;
+        --success: #0f9d58;
+        --danger: #d93025;
+      }
+      body {
+        font: 13px/1.4 "Google Sans", Roboto, Arial, sans-serif;
+        color: var(--fg);
+        background: var(--bg);
+        margin: 0;
+        padding: 16px 16px 24px;
+      }
+      h1 {
+        font-size: 16px;
+        margin: 0 0 12px;
+      }
+      p.hint { color: var(--muted); margin: 6px 0 12px; }
+      .field { margin-bottom: 12px; }
+      .field label { display: block; font-weight: 500; margin-bottom: 6px; }
+      .field input[type="text"],
+      .field input[type="url"],
+      .field input[type="password"] {
+        width: 100%;
+        box-sizing: border-box;
+        padding: 8px 10px;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        outline: none;
+      }
+      .row { display: flex; gap: 8px; align-items: center; }
+      .row .grow { flex: 1 1 auto; }
+      .btn {
+        display: inline-block;
+        border: 1px solid var(--border);
+        background: #f8f9fa;
+        color: var(--fg);
+        border-radius: 6px;
+        padding: 8px 12px;
+        cursor: pointer;
+        user-select: none;
+      }
+      .btn.primary { background: var(--primary); color: white; border-color: var(--primary); }
+      .btn.ghost { background: transparent; }
+      .btn:disabled { opacity: 0.6; cursor: default; }
+      .status { margin-top: 10px; min-height: 18px; color: var(--muted); }
+      .status.ok { color: var(--success); }
+      .status.err { color: var(--danger); }
+      hr { border: 0; border-top: 1px solid var(--border); margin: 16px 0; }
+    </style>
+  </head>
+  <body>
+    <h1>SheetFire Settings</h1>
+    <div class="field">
+      <label for="endpoint">CF_ENDPOINT</label>
+      <input id="endpoint" type="url" placeholder="https://your-cloud-run-url" />
+    </div>
+    <div class="field">
+      <label for="collection">COLLECTION</label>
+      <input id="collection" type="text" placeholder="myCollection" />
+    </div>
+    <div class="field">
+      <label for="docField">DOC_ID_FIELD_NAME</label>
+      <input id="docField" type="text" placeholder="docId" />
+    </div>
+    <div class="field row">
+      <input id="includeId" type="checkbox" />
+      <label for="includeId">Include the docId field in the written document</label>
+    </div>
+
+    <div class="row" style="margin-top: 8px;">
+      <button class="btn primary" id="saveBtn">Save Settings</button>
+      <button class="btn" id="reloadBtn">Reload</button>
+    </div>
+
+    <hr />
+    <h1>APP_SECRET</h1>
+    <p class="hint">Not stored. Used only for the current action/session.</p>
+    <div class="field">
+      <label for="secret">APP_SECRET</label>
+      <input id="secret" type="password" placeholder="Enter your APP_SECRET" />
+    </div>
+    <div class="row">
+      <button class="btn" id="setSecretBtn">Use For Session</button>
+      <button class="btn" id="diagBtn">Run Diagnostics</button>
+    </div>
+
+    <div class="status" id="status"></div>
+
+    <script>
+      const $ = (id) => document.getElementById(id);
+      const setStatus = (msg, cls = '') => {
+        const el = $("status");
+        el.textContent = msg || '';
+        el.className = 'status ' + (cls || '');
+      };
+
+      function load() {
+        setStatus('Loading…');
+        google.script.run
+          .withSuccessHandler((cfg) => {
+            $("endpoint").value = cfg.CF_ENDPOINT || '';
+            $("collection").value = cfg.COLLECTION || '';
+            $("docField").value = cfg.DOC_ID_FIELD_NAME || 'docId';
+            $("includeId").checked = !!cfg.INCLUDE_ID_FIELD_IN_DOC;
+            setStatus('');
+          })
+          .withFailureHandler((err) => setStatus('Error: ' + err, 'err'))
+          .loadDocumentConfig();
+      }
+
+      function save() {
+        setStatus('Saving…');
+        const payload = {
+          CF_ENDPOINT: $("endpoint").value.trim(),
+          COLLECTION: $("collection").value.trim(),
+          DOC_ID_FIELD_NAME: $("docField").value.trim(),
+          INCLUDE_ID_FIELD_IN_DOC: $("includeId").checked,
+        };
+        google.script.run
+          .withSuccessHandler(() => setStatus('Saved.', 'ok'))
+          .withFailureHandler((err) => setStatus('Save failed: ' + err, 'err'))
+          .saveDocumentConfig(payload);
+      }
+
+      function setSecretForSession() {
+        const secret = $("secret").value.trim();
+        if (!secret) { setStatus('Enter APP_SECRET first.', 'err'); return; }
+        google.script.run
+          .withSuccessHandler(() => setStatus('Secret set for this session.', 'ok'))
+          .withFailureHandler((err) => setStatus('Failed to set secret: ' + err, 'err'))
+          .setSessionSecret_(secret);
+      }
+
+      function runDiagnostics() {
+        setStatus('Running diagnostics…');
+        const secret = $("secret").value.trim();
+        google.script.run
+          .withSuccessHandler((res) => setStatus(res.ok ? res.message : res.message, res.ok ? 'ok' : 'err'))
+          .withFailureHandler((err) => setStatus('Diagnostics error: ' + err, 'err'))
+          .runDiagnostics({ APP_SECRET: secret });
+      }
+
+      $("saveBtn").addEventListener('click', save);
+      $("reloadBtn").addEventListener('click', load);
+      $("setSecretBtn").addEventListener('click', setSecretForSession);
+      $("diagBtn").addEventListener('click', runDiagnostics);
+
+      document.addEventListener('DOMContentLoaded', load);
+    </script>
+  </body>
+  </html>
+

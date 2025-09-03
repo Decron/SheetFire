@@ -55,6 +55,10 @@ echo "Creating standalone Apps Script project: $TITLE"
   cd "$inst_dir"
   cp -f "$repo_root/apps-script/Code.js" .
   cp -f "$repo_root/apps-script/appsscript.json" .
+  # Include HTML files used by HtmlService (e.g., Sidebar.html)
+  if [[ -f "$repo_root/apps-script/Sidebar.html" ]]; then
+    cp -f "$repo_root/apps-script/Sidebar.html" .
+  fi
   npx --yes clasp create --type standalone --title "$TITLE"
   npx --yes clasp push -f
 )
@@ -62,4 +66,3 @@ echo "Creating standalone Apps Script project: $TITLE"
 echo
 echo "Done. Project created in: $inst_dir"
 echo "Open it with: cd $inst_dir && npx clasp open"
-

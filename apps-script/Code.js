@@ -1,23 +1,84 @@
-// ==== CONFIG ====
-// Values can be overridden via Script Properties (CF_ENDPOINT, COLLECTION, APP_SECRET)
-const props = PropertiesService.getScriptProperties();
-const CF_ENDPOINT = props.getProperty('CF_ENDPOINT') || 'https://functionname.a.run.app';
-const COLLECTION  = props.getProperty('COLLECTION')  || 'imageDataTest';
-const APP_SECRET  = props.getProperty('APP_SECRET')  || 'randomString';
-const DOC_ID_FIELD_NAME = 'docId';
-const INCLUDE_ID_FIELD_IN_DOC = false;
-// ========================
+// ==== CONFIG (per-sheet) ====
+// Configuration is persisted in Document Properties (per spreadsheet).
+// For backwards compatibility, Script Properties are used as fallback for
+// CF_ENDPOINT and COLLECTION only. APP_SECRET is NOT persisted for security.
+
+/** Cached session secret for a single invocation (not persisted). */
+let __SESSION_APP_SECRET = null;
 
 /**
- * Set required script properties (CF_ENDPOINT, COLLECTION, APP_SECRET).
- * Intended for use via clasp run or the Apps Script API.
+ * Read effective configuration with precedence:
+ * 1) Document Properties (per sheet)
+ * 2) Script Properties (legacy fallback for CF_ENDPOINT, COLLECTION)
+ * 3) Defaults
+ * Note: APP_SECRET is never read from Document Properties; optional fallback from
+ * Script Properties is supported for legacy projects but not written by this code.
+ */
+function getConfig_() {
+  const docProps = PropertiesService.getDocumentProperties();
+
+  const CF_ENDPOINT = (docProps.getProperty('CF_ENDPOINT')
+    || 'https://functionname.a.run.app').trim();
+  const COLLECTION = (docProps.getProperty('COLLECTION')
+    || 'imageDataTest').trim();
+
+  const DOC_ID_FIELD_NAME = (docProps.getProperty('DOC_ID_FIELD_NAME') || 'docId').trim();
+
+  // Stored as string 'true' | 'false'
+  const INCLUDE_ID_FIELD_IN_DOC = String(docProps.getProperty('INCLUDE_ID_FIELD_IN_DOC') || 'false') === 'true';
+
+  // APP_SECRET is not persisted; no fallback store in Add-on context
+  return { CF_ENDPOINT, COLLECTION, DOC_ID_FIELD_NAME, INCLUDE_ID_FIELD_IN_DOC };
+}
+
+/** Persist non-secret config values into Document Properties. */
+function saveDocumentConfig(opts) {
+  const docProps = PropertiesService.getDocumentProperties();
+  const updates = {};
+  if (opts.CF_ENDPOINT != null) updates.CF_ENDPOINT = String(opts.CF_ENDPOINT).trim();
+  if (opts.COLLECTION != null) updates.COLLECTION = String(opts.COLLECTION).trim();
+  if (opts.DOC_ID_FIELD_NAME != null) updates.DOC_ID_FIELD_NAME = String(opts.DOC_ID_FIELD_NAME).trim();
+  if (opts.INCLUDE_ID_FIELD_IN_DOC != null) updates.INCLUDE_ID_FIELD_IN_DOC = String(!!opts.INCLUDE_ID_FIELD_IN_DOC);
+  docProps.setProperties(updates, true);
+  return { ok: true, updated: Object.keys(updates) };
+}
+
+/** Load non-secret config values from Document Properties with defaults. */
+function loadDocumentConfig() {
+  const cfg = getConfig_();
+  // Do not return APP_SECRET (not persisted). Caller should provide it interactively.
+  return {
+    CF_ENDPOINT: cfg.CF_ENDPOINT,
+    COLLECTION: cfg.COLLECTION,
+    DOC_ID_FIELD_NAME: cfg.DOC_ID_FIELD_NAME,
+    INCLUDE_ID_FIELD_IN_DOC: cfg.INCLUDE_ID_FIELD_IN_DOC,
+  };
+}
+
+/** Set the in-session APP_SECRET (not persisted). */
+function setSessionSecret_(secret) {
+  __SESSION_APP_SECRET = secret ? String(secret) : null;
+}
+
+/** Get the in-session APP_SECRET or legacy fallback. */
+function getSessionSecret_() {
+  if (__SESSION_APP_SECRET && typeof __SESSION_APP_SECRET === 'string') return __SESSION_APP_SECRET;
+  return '';
+}
+// ======================================
+
+/**
+ * Set per-sheet properties (CF_ENDPOINT, COLLECTION, DOC_ID_FIELD_NAME, INCLUDE_ID_FIELD_IN_DOC).
+ * Note: APP_SECRET is intentionally not persisted.
+ * Intended for use via clasp run or the Apps Script API against this spreadsheet.
  */
 function setProperties(opts) {
-  PropertiesService.getScriptProperties().setProperties({
+  saveDocumentConfig({
     CF_ENDPOINT: opts.endpoint,
     COLLECTION: opts.collection,
-    APP_SECRET: opts.secret,
-  }, true);
+    DOC_ID_FIELD_NAME: opts.docIdFieldName,
+    INCLUDE_ID_FIELD_IN_DOC: opts.includeIdField === true,
+  });
 }
 
 /**
@@ -30,6 +91,7 @@ function setProperties(opts) {
 function pushSelectedRowsToFirestore() {
   const sheet = SpreadsheetApp.getActiveSheet();
   const ui = SpreadsheetApp.getUi();
+  const cfg = getConfig_();
 
   const headerRow = 1;
   const lastCol = sheet.getLastColumn();
@@ -38,15 +100,19 @@ function pushSelectedRowsToFirestore() {
   // Find the docID column in headers
   const docIdColIndex1 = findDocIdColIndex_(headers);
   if (!docIdColIndex1) {
-    ui.alert(`Header "${DOC_ID_FIELD_NAME}" not found in row ${headerRow}. Aborting.`);
+    ui.alert(`Header "${cfg.DOC_ID_FIELD_NAME}" not found in row ${headerRow}. Aborting.`);
     return;
   }
+
+  // Prompt for secret once per push (not persisted)
+  const secret = promptForSecretOnce_();
+  if (secret == null) return; // user canceled
 
   const range = sheet.getActiveRange();
   const startRow = range.getRow();
   const numRows  = range.getNumRows();
 
-  const summary = processRowsToFirestore_(sheet, headers, docIdColIndex1, startRow, numRows);
+  const summary = processRowsToFirestore_(sheet, headers, docIdColIndex1, startRow, numRows, secret);
   ui.alert(formatSummary_(summary));
 }
 
@@ -56,6 +122,7 @@ function pushSelectedRowsToFirestore() {
 function pushAllRowsToFirestore() {
   const sheet = SpreadsheetApp.getActiveSheet();
   const ui = SpreadsheetApp.getUi();
+  const cfg = getConfig_();
 
   const headerRow = 1;
   const lastRow = sheet.getLastRow();
@@ -69,22 +136,27 @@ function pushAllRowsToFirestore() {
 
   const docIdColIndex1 = findDocIdColIndex_(headers);
   if (!docIdColIndex1) {
-    ui.alert(`Header "${DOC_ID_FIELD_NAME}" not found in row ${headerRow}. Aborting.`);
+    ui.alert(`Header "${cfg.DOC_ID_FIELD_NAME}" not found in row ${headerRow}. Aborting.`);
     return;
   }
+
+  // Prompt for secret once per push (not persisted)
+  const secret = promptForSecretOnce_();
+  if (secret == null) return; // user canceled
 
   const startRow = headerRow + 1;
   const numRows  = lastRow - headerRow;
 
-  const summary = processRowsToFirestore_(sheet, headers, docIdColIndex1, startRow, numRows);
+  const summary = processRowsToFirestore_(sheet, headers, docIdColIndex1, startRow, numRows, secret);
   ui.alert(formatSummary_(summary));
 }
 
 /**
  * Same as pushSelectedRowsToFirestore, but returns summary and does not alert.
  */
-function pushSelectedRowsToFirestoreNoAlert_() {
+function pushSelectedRowsToFirestoreNoAlert_(secret) {
   const sheet = SpreadsheetApp.getActiveSheet();
+  const cfg = getConfig_();
 
   const headerRow = 1;
   const lastCol = sheet.getLastColumn();
@@ -92,21 +164,22 @@ function pushSelectedRowsToFirestoreNoAlert_() {
 
   const docIdColIndex1 = findDocIdColIndex_(headers);
   if (!docIdColIndex1) {
-    throw new Error('Header "' + DOC_ID_FIELD_NAME + '" not found in row ' + headerRow + '.');
+    throw new Error('Header "' + cfg.DOC_ID_FIELD_NAME + '" not found in row ' + headerRow + '.');
   }
 
   const range = sheet.getActiveRange();
   const startRow = range.getRow();
   const numRows  = range.getNumRows();
 
-  return processRowsToFirestore_(sheet, headers, docIdColIndex1, startRow, numRows);
+  return processRowsToFirestore_(sheet, headers, docIdColIndex1, startRow, numRows, secret);
 }
 
 /**
  * Same as pushAllRowsToFirestore, but returns summary and does not alert.
  */
-function pushAllRowsToFirestoreNoAlert_() {
+function pushAllRowsToFirestoreNoAlert_(secret) {
   const sheet = SpreadsheetApp.getActiveSheet();
+  const cfg = getConfig_();
 
   const headerRow = 1;
   const lastRow = sheet.getLastRow();
@@ -119,13 +192,13 @@ function pushAllRowsToFirestoreNoAlert_() {
 
   const docIdColIndex1 = findDocIdColIndex_(headers);
   if (!docIdColIndex1) {
-    throw new Error('Header "' + DOC_ID_FIELD_NAME + '" not found in row ' + headerRow + '.');
+    throw new Error('Header "' + cfg.DOC_ID_FIELD_NAME + '" not found in row ' + headerRow + '.');
   }
 
   const startRow = headerRow + 1;
   const numRows  = lastRow - headerRow;
 
-  return processRowsToFirestore_(sheet, headers, docIdColIndex1, startRow, numRows);
+  return processRowsToFirestore_(sheet, headers, docIdColIndex1, startRow, numRows, secret);
 }
 
 
@@ -135,6 +208,7 @@ function pushAllRowsToFirestoreNoAlert_() {
  * Find 1-based index of the DOC_ID_FIELD_NAME column in the header array (case-sensitive).
  */
 function findDocIdColIndex_(headers) {
+  const { DOC_ID_FIELD_NAME } = getConfig_();
   for (let i = 0; i < headers.length; i++) {
     if (String(headers[i]).trim() === DOC_ID_FIELD_NAME) {
       return i + 1; // 1-based
@@ -150,6 +224,7 @@ function findDocIdColIndex_(headers) {
  * - Optionally include docId as a field too (INCLUDE_ID_FIELD_IN_DOC).
  */
 function buildDocFromRow_(headers, rowValues, docIdColIndex1) {
+  const { DOC_ID_FIELD_NAME, INCLUDE_ID_FIELD_IN_DOC } = getConfig_();
   const idx0 = docIdColIndex1 - 1;
   const rawId = rowValues[idx0];
   const docId = (rawId === '' || rawId === null) ? '' : String(rawId).trim();
@@ -177,7 +252,7 @@ function buildDocFromRow_(headers, rowValues, docIdColIndex1) {
  *  - docId from DOC_ID_FIELD_NAME column,
  *  - fields from columns to the right of that column (entire row, not just selected columns).
  */
-function processRowsToFirestore_(sheet, headers, docIdColIndex1, startRow, numRows) {
+function processRowsToFirestore_(sheet, headers, docIdColIndex1, startRow, numRows, secret) {
   const lastCol = sheet.getLastColumn();
 
   // Read the FULL width of the sheet for the chosen rows, so we can always access docId + fields to the right
@@ -201,7 +276,7 @@ function processRowsToFirestore_(sheet, headers, docIdColIndex1, startRow, numRo
         continue; // skip rows with blank docID
       }
 
-      writeDoc_(doc, docId);
+      writeDoc_(doc, docId, secret);
       summary.sent++;
     } catch (e) {
       summary.skippedErrors++;
@@ -215,11 +290,13 @@ function processRowsToFirestore_(sheet, headers, docIdColIndex1, startRow, numRo
 /**
  * Writes a document to your HTTPS endpoint (Cloud Function / Cloud Run).
  */
-function writeDoc_(doc, docId) {
+function writeDoc_(doc, docId, secretOpt) {
+  const { CF_ENDPOINT, COLLECTION } = getConfig_();
+  const secret = secretOpt || getSessionSecret_();
   const res = UrlFetchApp.fetch(CF_ENDPOINT, {
     method: 'post',
     contentType: 'application/json',
-    headers: { 'x-app-secret': APP_SECRET },
+    headers: { 'x-app-secret': secret },
     payload: JSON.stringify({ collection: COLLECTION, doc, docId }),
     muteHttpExceptions: true,
   });
@@ -245,7 +322,18 @@ function onOpen() {
     .createMenu('Firestore')
     .addItem('Push selected rows', 'pushSelectedRowsToFirestore')
     .addItem('Push all rows (below header)', 'pushAllRowsToFirestore')
+    .addSeparator()
+    .addItem('Configuration…', 'openConfigSidebar')
+    .addItem('Diagnostics…', 'openConfigSidebar')
     .addToUi();
+}
+
+/** Open the configuration sidebar (per-sheet settings). */
+function openConfigSidebar() {
+  const html = HtmlService.createHtmlOutputFromFile('Sidebar')
+    .setTitle('SheetFire Settings')
+    .setWidth(420);
+  SpreadsheetApp.getUi().showSidebar(html);
 }
 
 // ====== Editor Add-on (Sheets) UI ======
@@ -269,11 +357,18 @@ function buildHomeCard_(e) {
   card.setHeader(CardService.newCardHeader().setTitle('SheetFire'));
 
   var s = CardService.newCardSection();
+  var cfg = getConfig_();
 
   s.addWidget(CardService.newTextParagraph()
-    .setText('Endpoint: ' + CF_ENDPOINT));
+    .setText('Endpoint: ' + cfg.CF_ENDPOINT));
   s.addWidget(CardService.newTextParagraph()
-    .setText('Collection: ' + COLLECTION));
+    .setText('Collection: ' + cfg.COLLECTION));
+
+  // Inline, non-persistent secret input for actions below
+  s.addWidget(CardService.newTextInput()
+    .setFieldName('APP_SECRET')
+    .setTitle('APP_SECRET (not stored)')
+    .setHint('Required for push/diagnostics. Never persisted.'));
 
   var actionsRow = CardService.newButtonSet()
     .addButton(CardService.newTextButton()
@@ -283,6 +378,10 @@ function buildHomeCard_(e) {
       .setText('Push all rows')
       .setOnClickAction(CardService.newAction().setFunctionName('handlePushAll_')));
   s.addWidget(actionsRow);
+
+  s.addWidget(CardService.newTextButton()
+    .setText('Run diagnostics')
+    .setOnClickAction(CardService.newAction().setFunctionName('handleDiagnostics_')));
 
   s.addWidget(CardService.newTextButton()
     .setText('Settings')
@@ -299,18 +398,28 @@ function showSettingsCard_(e) {
   card.setHeader(CardService.newCardHeader().setTitle('Settings'));
   var s = CardService.newCardSection();
 
+  var cfg = getConfig_();
+
   s.addWidget(CardService.newTextInput()
     .setFieldName('CF_ENDPOINT')
     .setTitle('CF_ENDPOINT')
-    .setValue(CF_ENDPOINT));
+    .setValue(cfg.CF_ENDPOINT));
   s.addWidget(CardService.newTextInput()
     .setFieldName('COLLECTION')
     .setTitle('COLLECTION')
-    .setValue(COLLECTION));
+    .setValue(cfg.COLLECTION));
   s.addWidget(CardService.newTextInput()
-    .setFieldName('APP_SECRET')
-    .setTitle('APP_SECRET')
-    .setValue(APP_SECRET));
+    .setFieldName('DOC_ID_FIELD_NAME')
+    .setTitle('DOC_ID_FIELD_NAME')
+    .setValue(cfg.DOC_ID_FIELD_NAME));
+  s.addWidget(CardService.newSelectionInput()
+    .setFieldName('INCLUDE_ID_FIELD_IN_DOC')
+    .setTitle('INCLUDE_ID_FIELD_IN_DOC')
+    .setType(CardService.SelectionInputType.CHECK_BOX)
+    .addItem('Include the docId field in payload', 'true', cfg.INCLUDE_ID_FIELD_IN_DOC));
+
+  s.addWidget(CardService.newTextParagraph()
+    .setText('APP_SECRET is not stored. Provide it on the home card when pushing or running diagnostics.'));
 
   s.addWidget(CardService.newTextButton()
     .setText('Save')
@@ -325,14 +434,18 @@ function showSettingsCard_(e) {
 function saveSettings_(e) {
   try {
     var inputs = (e && e.commonEventObject && e.commonEventObject.formInputs) || {};
-    var endpoint = getInputString_(inputs, 'CF_ENDPOINT', CF_ENDPOINT);
-    var collection = getInputString_(inputs, 'COLLECTION', COLLECTION);
-    var secret = getInputString_(inputs, 'APP_SECRET', APP_SECRET);
-    PropertiesService.getScriptProperties().setProperties({
+    var current = getConfig_();
+    var endpoint = getInputString_(inputs, 'CF_ENDPOINT', current.CF_ENDPOINT);
+    var collection = getInputString_(inputs, 'COLLECTION', current.COLLECTION);
+    var docField = getInputString_(inputs, 'DOC_ID_FIELD_NAME', current.DOC_ID_FIELD_NAME);
+    var includeId = getInputBool_(inputs, 'INCLUDE_ID_FIELD_IN_DOC', current.INCLUDE_ID_FIELD_IN_DOC);
+
+    saveDocumentConfig({
       CF_ENDPOINT: endpoint,
       COLLECTION: collection,
-      APP_SECRET: secret,
-    }, true);
+      DOC_ID_FIELD_NAME: docField,
+      INCLUDE_ID_FIELD_IN_DOC: includeId,
+    });
 
     var nav = CardService.newNavigation().updateCard(buildHomeCard_(e));
     return CardService.newActionResponseBuilder()
@@ -354,10 +467,30 @@ function getInputString_(inputs, key, fallback) {
   return vals.length ? String(vals[0]) : fallback;
 }
 
+/** Utility: read a boolean value from selectionInputs (checkbox). */
+function getInputBool_(inputs, key, fallback) {
+  var obj = inputs[key];
+  if (!obj) return !!fallback;
+  if (obj.stringInputs && Array.isArray(obj.stringInputs.value)) {
+    // Any selected value considered true
+    return obj.stringInputs.value.length > 0;
+  }
+  if (obj.boolInputs && Array.isArray(obj.boolInputs.value)) {
+    return obj.boolInputs.value.some(Boolean);
+  }
+  return !!fallback;
+}
+
 /** Action handler: push selected rows via existing logic. */
 function handlePushSelected_(e) {
   try {
-    var summary = pushSelectedRowsToFirestoreNoAlert_();
+    var inputs = (e && e.commonEventObject && e.commonEventObject.formInputs) || {};
+    var secret = getInputString_(inputs, 'APP_SECRET', '');
+    if (!secret) return CardService.newActionResponseBuilder()
+      .setNotification(CardService.newNotification().setText('APP_SECRET required'))
+      .build();
+    setSessionSecret_(secret);
+    var summary = pushSelectedRowsToFirestoreNoAlert_(secret);
     return CardService.newActionResponseBuilder()
       .setNotification(CardService.newNotification().setText('Pushed selected rows: ' + summary.sent + ' sent.'))
       .build();
@@ -371,9 +504,32 @@ function handlePushSelected_(e) {
 /** Action handler: push all rows via existing logic. */
 function handlePushAll_(e) {
   try {
-    var summary = pushAllRowsToFirestoreNoAlert_();
+    var inputs = (e && e.commonEventObject && e.commonEventObject.formInputs) || {};
+    var secret = getInputString_(inputs, 'APP_SECRET', '');
+    if (!secret) return CardService.newActionResponseBuilder()
+      .setNotification(CardService.newNotification().setText('APP_SECRET required'))
+      .build();
+    setSessionSecret_(secret);
+    var summary = pushAllRowsToFirestoreNoAlert_(secret);
     return CardService.newActionResponseBuilder()
       .setNotification(CardService.newNotification().setText('Pushed all rows: ' + summary.sent + ' sent.'))
+      .build();
+  } catch (err) {
+    return CardService.newActionResponseBuilder()
+      .setNotification(CardService.newNotification().setText('Error: ' + err))
+      .build();
+  }
+}
+
+/** Add-on action: run diagnostics using provided APP_SECRET. */
+function handleDiagnostics_(e) {
+  try {
+    var inputs = (e && e.commonEventObject && e.commonEventObject.formInputs) || {};
+    var secret = getInputString_(inputs, 'APP_SECRET', '');
+    var result = runDiagnostics({ APP_SECRET: secret });
+    var text = result.ok ? 'Diagnostics passed: ' + result.message : 'Diagnostics failed: ' + result.message;
+    return CardService.newActionResponseBuilder()
+      .setNotification(CardService.newNotification().setText(text))
       .build();
   } catch (err) {
     return CardService.newActionResponseBuilder()
@@ -480,6 +636,7 @@ function createOnSubmitTrigger() {
  */
 function onSheetFormSubmit(e) {
   const sheet = e && e.range ? e.range.getSheet() : SpreadsheetApp.getActiveSheet();
+  const { DOC_ID_FIELD_NAME } = getConfig_();
   const headerRow = 1;
   const lastCol = sheet.getLastColumn();
   const headers = sheet.getRange(headerRow, 1, 1, lastCol).getValues()[0];
@@ -539,7 +696,7 @@ function formatSummary_(s) {
   const lines = [
     `Attempted rows: ${s.attemptedRows}`,
     `Sent: ${s.sent}`,
-    `Skipped (blank ${DOC_ID_FIELD_NAME}): ${s.skippedNoId}`,
+    `Skipped (blank ${getConfig_().DOC_ID_FIELD_NAME}): ${s.skippedNoId}`,
     `Skipped due to errors: ${s.skippedErrors}`,
   ];
 
@@ -558,6 +715,7 @@ function formatSummary_(s) {
 
 // AUTO: stamp yyyymmdd docID for the new response, then push ONLY that row to Firestore
 function onFormSubmit(e) {
+  const { DOC_ID_FIELD_NAME } = getConfig_();
   const sheet = e.range.getSheet();
   const row   = e.range.getRow();
 
@@ -609,10 +767,66 @@ function onFormSubmit(e) {
 
   try {
     // Reuse your pipeline but for exactly one row
-    const summary = processRowsToFirestore_(sheet, hdrs, docIdColIndex1, row, 1);
+    // This trigger cannot prompt for a secret; require legacy script property fallback.
+    const summary = processRowsToFirestore_(sheet, hdrs, docIdColIndex1, row, 1, getSessionSecret_());
     // Optional: small toast for debugging (remove if not wanted)
     sheet.toast(`Firestore push: sent ${summary.sent}, skippedNoId ${summary.skippedNoId}, errors ${summary.skippedErrors}`, 'onFormSubmit');
   } catch (err) {
     console.error('Push latest row failed:', err);
+  }
+}
+
+// ================= Configuration Sidebar (HTMLService) =================
+
+/** Prompt user for APP_SECRET once (spreadsheet UI), not persisted. */
+function promptForSecretOnce_() {
+  const ui = SpreadsheetApp.getUi();
+  // If we have a session secret already (e.g., from sidebar), reuse it
+  var existing = getSessionSecret_();
+  if (existing) return existing;
+  const resp = ui.prompt('APP_SECRET required', 'Enter APP_SECRET for this session (not stored).', ui.ButtonSet.OK_CANCEL);
+  if (resp.getSelectedButton() !== ui.Button.OK) return null;
+  const secret = (resp.getResponseText() || '').trim();
+  if (!secret) {
+    ui.alert('APP_SECRET is required to push.');
+    return null;
+  }
+  setSessionSecret_(secret);
+  return secret;
+}
+
+/** Non-destructive endpoint check using dryRun. */
+function runDiagnostics(opts) {
+  const cfg = getConfig_();
+  const endpoint = cfg.CF_ENDPOINT;
+  const collection = cfg.COLLECTION;
+  const doc = { _diagnostic: true, _ts: new Date().toISOString() };
+  const appSecret = (opts && opts.APP_SECRET) ? String(opts.APP_SECRET) : getSessionSecret_();
+
+  if (!endpoint) return { ok: false, message: 'CF_ENDPOINT is empty' };
+  if (!collection) return { ok: false, message: 'COLLECTION is empty' };
+  if (!appSecret) return { ok: false, message: 'APP_SECRET not provided' };
+
+  try {
+    const res = UrlFetchApp.fetch(endpoint, {
+      method: 'post',
+      contentType: 'application/json',
+      headers: { 'x-app-secret': appSecret },
+      payload: JSON.stringify({ collection, doc, docId: '', dryRun: true }),
+      muteHttpExceptions: true,
+    });
+    const code = res.getResponseCode();
+    const body = res.getContentText() || '';
+    if (code >= 200 && code < 300) {
+      // Try to parse for additional context
+      try {
+        const j = JSON.parse(body);
+        if (j && j.ok) return { ok: true, message: 'Healthy (dryRun ok: ' + (j.path || j.wouldWriteTo || 'ok') + ')' };
+      } catch (_) {}
+      return { ok: true, message: 'Healthy (HTTP ' + code + ')' };
+    }
+    return { ok: false, message: 'HTTP ' + code + ': ' + body.slice(0, 200) };
+  } catch (err) {
+    return { ok: false, message: String(err && err.message || err) };
   }
 }

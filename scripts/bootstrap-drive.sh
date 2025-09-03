@@ -106,6 +106,10 @@ echo "Creating new Sheet + bound Apps Script via clasp..."
   cd "$instance_dir"
   # Seed with our Apps Script sources
   cp -f "$repo_root/apps-script/Code.js" "$repo_root/apps-script/appsscript.json" .
+  # Include HtmlService templates (e.g., Sidebar)
+  if [[ -f "$repo_root/apps-script/Sidebar.html" ]]; then
+    cp -f "$repo_root/apps-script/Sidebar.html" .
+  fi
   # Create a container-bound project attached to a new Sheet
   npx --yes clasp create --type sheets --title "$TITLE" >/tmp/clasp_create_$$.log 2>&1 || {
     echo "clasp create failed. Check authentication with: npx clasp login" >&2
@@ -153,4 +157,3 @@ Summary
 - With form:   $WITH_FORM
 
 EOF
-
