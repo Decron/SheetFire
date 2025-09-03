@@ -84,13 +84,12 @@
 
     <hr />
     <h1>APP_SECRET</h1>
-    <p class="hint">Not stored. Used only for the current action/session.</p>
+    <p class="hint">Stored per user via PropertiesService. Leave blank to keep existing.</p>
     <div class="field">
       <label for="secret">APP_SECRET</label>
       <input id="secret" type="password" placeholder="Enter your APP_SECRET" />
     </div>
     <div class="row">
-      <button class="btn" id="setSecretBtn">Use For Session</button>
       <button class="btn" id="diagBtn">Run Diagnostics</button>
     </div>
 
@@ -126,37 +125,36 @@
           DOC_ID_FIELD_NAME: $("docField").value.trim(),
           INCLUDE_ID_FIELD_IN_DOC: $("includeId").checked,
         };
+        // Save settings, then also save secret if provided
         google.script.run
-          .withSuccessHandler(() => setStatus('Saved.', 'ok'))
+          .withSuccessHandler(() => {
+            const secret = $("secret").value.trim();
+            if (secret) {
+              google.script.run
+                .withSuccessHandler(() => setStatus('Saved settings + secret.', 'ok'))
+                .withFailureHandler((err) => setStatus('Save secret failed: ' + err, 'err'))
+                .saveSecret_(secret);
+            } else {
+              setStatus('Saved settings.', 'ok');
+            }
+          })
           .withFailureHandler((err) => setStatus('Save failed: ' + err, 'err'))
           .saveDocumentConfig(payload);
       }
 
-      function setSecretForSession() {
-        const secret = $("secret").value.trim();
-        if (!secret) { setStatus('Enter APP_SECRET first.', 'err'); return; }
-        google.script.run
-          .withSuccessHandler(() => setStatus('Secret set for this session.', 'ok'))
-          .withFailureHandler((err) => setStatus('Failed to set secret: ' + err, 'err'))
-          .setSessionSecret_(secret);
-      }
-
       function runDiagnostics() {
         setStatus('Running diagnostics…');
-        const secret = $("secret").value.trim();
         google.script.run
           .withSuccessHandler((res) => setStatus(res.ok ? res.message : res.message, res.ok ? 'ok' : 'err'))
           .withFailureHandler((err) => setStatus('Diagnostics error: ' + err, 'err'))
-          .runDiagnostics({ APP_SECRET: secret });
+          .runDiagnostics({});
       }
 
       $("saveBtn").addEventListener('click', save);
       $("reloadBtn").addEventListener('click', load);
-      $("setSecretBtn").addEventListener('click', setSecretForSession);
       $("diagBtn").addEventListener('click', runDiagnostics);
 
       document.addEventListener('DOMContentLoaded', load);
     </script>
   </body>
   </html>
-

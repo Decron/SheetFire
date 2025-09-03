@@ -1,10 +1,22 @@
 // ==== CONFIG (per-sheet) ====
 // Configuration is persisted in Document Properties (per spreadsheet).
 // For backwards compatibility, Script Properties are used as fallback for
-// CF_ENDPOINT and COLLECTION only. APP_SECRET is NOT persisted for security.
+// CF_ENDPOINT and COLLECTION only. APP_SECRET was previously not persisted.
 
 /** Cached session secret for a single invocation (not persisted). */
 let __SESSION_APP_SECRET = null;
+
+// ==== Secret storage (per-user) ====
+// Store APP_SECRET in User Properties after the user submits it in settings.
+function saveSecret_(secret) {
+  const encoded = Utilities.base64Encode(String(secret || ''));
+  PropertiesService.getUserProperties().setProperty('APP_SECRET', encoded);
+}
+
+function getSavedSecret_() {
+  const encoded = PropertiesService.getUserProperties().getProperty('APP_SECRET');
+  return encoded ? Utilities.newBlob(Utilities.base64Decode(encoded)).getDataAsString() : '';
+}
 
 /**
  * Read effective configuration with precedence:
@@ -63,7 +75,8 @@ function setSessionSecret_(secret) {
 /** Get the in-session APP_SECRET or legacy fallback. */
 function getSessionSecret_() {
   if (__SESSION_APP_SECRET && typeof __SESSION_APP_SECRET === 'string') return __SESSION_APP_SECRET;
-  return '';
+  // Fallback to saved secret (per-user) if no session override
+  return getSavedSecret_();
 }
 // ======================================
 
@@ -104,9 +117,12 @@ function pushSelectedRowsToFirestore() {
     return;
   }
 
-  // Prompt for secret once per push (not persisted)
-  const secret = promptForSecretOnce_();
-  if (secret == null) return; // user canceled
+  // Use saved secret; if missing, ask user to configure it
+  const secret = getSavedSecret_();
+  if (!secret) {
+    ui.alert('APP_SECRET is not set. Open Firestore → Configuration… and save your APP_SECRET.');
+    return;
+  }
 
   const range = sheet.getActiveRange();
   const startRow = range.getRow();
@@ -140,9 +156,12 @@ function pushAllRowsToFirestore() {
     return;
   }
 
-  // Prompt for secret once per push (not persisted)
-  const secret = promptForSecretOnce_();
-  if (secret == null) return; // user canceled
+  // Use saved secret; if missing, ask user to configure it
+  const secret = getSavedSecret_();
+  if (!secret) {
+    ui.alert('APP_SECRET is not set. Open Firestore → Configuration… and save your APP_SECRET.');
+    return;
+  }
 
   const startRow = headerRow + 1;
   const numRows  = lastRow - headerRow;
@@ -292,7 +311,7 @@ function processRowsToFirestore_(sheet, headers, docIdColIndex1, startRow, numRo
  */
 function writeDoc_(doc, docId, secretOpt) {
   const { CF_ENDPOINT, COLLECTION } = getConfig_();
-  const secret = secretOpt || getSessionSecret_();
+  const secret = secretOpt || getSavedSecret_();
   const res = UrlFetchApp.fetch(CF_ENDPOINT, {
     method: 'post',
     contentType: 'application/json',
@@ -364,11 +383,7 @@ function buildHomeCard_(e) {
   s.addWidget(CardService.newTextParagraph()
     .setText('Collection: ' + cfg.COLLECTION));
 
-  // Inline, non-persistent secret input for actions below
-  s.addWidget(CardService.newTextInput()
-    .setFieldName('APP_SECRET')
-    .setTitle('APP_SECRET (not stored)')
-    .setHint('Required for push/diagnostics. Never persisted.'));
+  // Secret is stored per-user via settings; no inline entry needed.
 
   var actionsRow = CardService.newButtonSet()
     .addButton(CardService.newTextButton()
@@ -418,8 +433,10 @@ function showSettingsCard_(e) {
     .setType(CardService.SelectionInputType.CHECK_BOX)
     .addItem('Include the docId field in payload', 'true', cfg.INCLUDE_ID_FIELD_IN_DOC));
 
-  s.addWidget(CardService.newTextParagraph()
-    .setText('APP_SECRET is not stored. Provide it on the home card when pushing or running diagnostics.'));
+  s.addWidget(CardService.newTextInput()
+    .setFieldName('APP_SECRET')
+    .setTitle('APP_SECRET')
+    .setHint('Stored per user. Leave blank to keep existing.'));
 
   s.addWidget(CardService.newTextButton()
     .setText('Save')
@@ -439,6 +456,7 @@ function saveSettings_(e) {
     var collection = getInputString_(inputs, 'COLLECTION', current.COLLECTION);
     var docField = getInputString_(inputs, 'DOC_ID_FIELD_NAME', current.DOC_ID_FIELD_NAME);
     var includeId = getInputBool_(inputs, 'INCLUDE_ID_FIELD_IN_DOC', current.INCLUDE_ID_FIELD_IN_DOC);
+    var newSecret = getInputString_(inputs, 'APP_SECRET', '');
 
     saveDocumentConfig({
       CF_ENDPOINT: endpoint,
@@ -447,10 +465,13 @@ function saveSettings_(e) {
       INCLUDE_ID_FIELD_IN_DOC: includeId,
     });
 
+    // Optionally save the secret if provided
+    if (newSecret) saveSecret_(newSecret);
+
     var nav = CardService.newNavigation().updateCard(buildHomeCard_(e));
     return CardService.newActionResponseBuilder()
       .setNavigation(nav)
-      .setNotification(CardService.newNotification().setText('Saved settings.'))
+      .setNotification(CardService.newNotification().setText('Saved settings' + (newSecret ? ' + secret.' : '.')))
       .build();
   } catch (err) {
     return CardService.newActionResponseBuilder()
@@ -484,12 +505,10 @@ function getInputBool_(inputs, key, fallback) {
 /** Action handler: push selected rows via existing logic. */
 function handlePushSelected_(e) {
   try {
-    var inputs = (e && e.commonEventObject && e.commonEventObject.formInputs) || {};
-    var secret = getInputString_(inputs, 'APP_SECRET', '');
+    var secret = getSavedSecret_();
     if (!secret) return CardService.newActionResponseBuilder()
-      .setNotification(CardService.newNotification().setText('APP_SECRET required'))
+      .setNotification(CardService.newNotification().setText('Set APP_SECRET in Settings first.'))
       .build();
-    setSessionSecret_(secret);
     var summary = pushSelectedRowsToFirestoreNoAlert_(secret);
     return CardService.newActionResponseBuilder()
       .setNotification(CardService.newNotification().setText('Pushed selected rows: ' + summary.sent + ' sent.'))
@@ -504,12 +523,10 @@ function handlePushSelected_(e) {
 /** Action handler: push all rows via existing logic. */
 function handlePushAll_(e) {
   try {
-    var inputs = (e && e.commonEventObject && e.commonEventObject.formInputs) || {};
-    var secret = getInputString_(inputs, 'APP_SECRET', '');
+    var secret = getSavedSecret_();
     if (!secret) return CardService.newActionResponseBuilder()
-      .setNotification(CardService.newNotification().setText('APP_SECRET required'))
+      .setNotification(CardService.newNotification().setText('Set APP_SECRET in Settings first.'))
       .build();
-    setSessionSecret_(secret);
     var summary = pushAllRowsToFirestoreNoAlert_(secret);
     return CardService.newActionResponseBuilder()
       .setNotification(CardService.newNotification().setText('Pushed all rows: ' + summary.sent + ' sent.'))
@@ -524,8 +541,7 @@ function handlePushAll_(e) {
 /** Add-on action: run diagnostics using provided APP_SECRET. */
 function handleDiagnostics_(e) {
   try {
-    var inputs = (e && e.commonEventObject && e.commonEventObject.formInputs) || {};
-    var secret = getInputString_(inputs, 'APP_SECRET', '');
+    var secret = getSavedSecret_();
     var result = runDiagnostics({ APP_SECRET: secret });
     var text = result.ok ? 'Diagnostics passed: ' + result.message : 'Diagnostics failed: ' + result.message;
     return CardService.newActionResponseBuilder()
@@ -768,7 +784,7 @@ function onFormSubmit(e) {
   try {
     // Reuse your pipeline but for exactly one row
     // This trigger cannot prompt for a secret; require legacy script property fallback.
-    const summary = processRowsToFirestore_(sheet, hdrs, docIdColIndex1, row, 1, getSessionSecret_());
+    const summary = processRowsToFirestore_(sheet, hdrs, docIdColIndex1, row, 1, getSavedSecret_());
     // Optional: small toast for debugging (remove if not wanted)
     sheet.toast(`Firestore push: sent ${summary.sent}, skippedNoId ${summary.skippedNoId}, errors ${summary.skippedErrors}`, 'onFormSubmit');
   } catch (err) {
@@ -784,7 +800,7 @@ function promptForSecretOnce_() {
   // If we have a session secret already (e.g., from sidebar), reuse it
   var existing = getSessionSecret_();
   if (existing) return existing;
-  const resp = ui.prompt('APP_SECRET required', 'Enter APP_SECRET for this session (not stored).', ui.ButtonSet.OK_CANCEL);
+  const resp = ui.prompt('APP_SECRET required', 'Enter APP_SECRET for this session.', ui.ButtonSet.OK_CANCEL);
   if (resp.getSelectedButton() !== ui.Button.OK) return null;
   const secret = (resp.getResponseText() || '').trim();
   if (!secret) {
@@ -801,7 +817,7 @@ function runDiagnostics(opts) {
   const endpoint = cfg.CF_ENDPOINT;
   const collection = cfg.COLLECTION;
   const doc = { _diagnostic: true, _ts: new Date().toISOString() };
-  const appSecret = (opts && opts.APP_SECRET) ? String(opts.APP_SECRET) : getSessionSecret_();
+  const appSecret = (opts && opts.APP_SECRET) ? String(opts.APP_SECRET) : getSavedSecret_();
 
   if (!endpoint) return { ok: false, message: 'CF_ENDPOINT is empty' };
   if (!collection) return { ok: false, message: 'COLLECTION is empty' };
